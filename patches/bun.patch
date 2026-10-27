@@ -1,0 +1,47 @@
+diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
+index 4e2fd93d..12218024 100644
+--- a/scripts/build/deps/webkit.ts
++++ b/scripts/build/deps/webkit.ts
+@@ -282,7 +282,7 @@ export const webkit: Dependency = {
+       const icuRoot = process.env.BUN_ANDROID_ICU_ROOT ?? "/tmp/icu-android";
+       optFlags.push(`--target=${cfg.crossTarget!}`, `--sysroot=${cfg.sysroot!}`, `-isystem`, join(icuRoot, "include"));
+     }
+-    if (cfg.freebsd && cfg.crossTarget !== undefined) {
++    if ((cfg.freebsd || (cfg.linux && cfg.abi === "musl")) && cfg.crossTarget !== undefined) {
+       optFlags.push(`--target=${cfg.crossTarget}`, `--sysroot=${cfg.sysroot!}`);
+     }
+     const optFlagStr = optFlags.join(" ");
+@@ -318,6 +318,17 @@ export const webkit: Dependency = {
+             CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "BOTH",
+           }
+         : {}),
++      ...(cfg.linux && cfg.abi === "musl" && cfg.sysroot !== undefined
++        ? {
++            CMAKE_SYSTEM_NAME: "Linux",
++            CMAKE_SYSTEM_PROCESSOR: cfg.arm64 ? "aarch64" : "x86_64",
++            CMAKE_SYSROOT: cfg.sysroot,
++            CMAKE_FIND_ROOT_PATH_MODE_PROGRAM: "NEVER",
++            CMAKE_FIND_ROOT_PATH_MODE_PACKAGE: "ONLY",
++            CMAKE_FIND_ROOT_PATH_MODE_LIBRARY: "ONLY",
++            CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "ONLY",
++          }
++        : {}),
+       ...(cfg.freebsd && cfg.crossTarget !== undefined
+         ? {
+             CMAKE_SYSTEM_NAME: "FreeBSD",
+diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
+index 5b322de8..d6627227 100644
+--- a/scripts/build/flags.ts
++++ b/scripts/build/flags.ts
+@@ -71,9 +71,9 @@ export const cpuTargetFlags: Flag[] = [
+     desc: "ARM64 Windows: ARMv8-A base + CRC, generic tuning (clang-cl prefix required)",
+   },
+   {
+-    flag: "-march=nehalem",
++    flag: c => (c.linux && process.env.BUN_CORE2_BUILD === "1" ? "-march=penryn" : "-march=nehalem"),
+     when: c => c.x64,
+-    desc: "x64: Nehalem (2008) — no AVX, broadest compatibility",
++    desc: "x64: Nehalem by default; opt-in Penryn for legacy Linux CPUs",
+   },
+ ];
+ 

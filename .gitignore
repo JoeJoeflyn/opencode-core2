@@ -1,0 +1,26 @@
+# Publish only this small source recipe, never the private repair workspace.
+/work/
+/build/
+/dist/
+/logs/
+/cache/
+/sysroot/
+/toolchain/
+node_modules/
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.core
+*.zip
+*.tar*
+*.apk
+*.a
+*.o
+*.so*
+*.exe
+.env
+.env.*
+auth.json
+*.pem
+*.key
