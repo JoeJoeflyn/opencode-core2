@@ -82,14 +82,81 @@ The matching build passed native binary export/dependency/hardening checks. Only
 
 ## Debian / glibc (tested 2026-11-10)
 
-The recipe above targets Alpine/musl. A glibc (Debian) build is also possible and was validated on an identical MacBookAir3,1 running Debian 13:
+A glibc (Debian) build was validated on an identical MacBookAir3,1 running Debian 13. It uses the same patches as the Alpine recipe, but builds natively on the x86-64 host (no musl sysroot). The `bun-highway-targets.patch` is **required** — without it, Highway compiles SSE4.2/AVX paths that SIGILL on Penryn.
 
-- Apply `patches/bun.patch` **and** `patches/bun-highway-targets.patch` to bun; apply `patches/opencode.patch` to opencode.
-- Build bun with `--abi=gnu` (instead of `--abi=musl`) and the same `BUN_CORE2_BUILD=1`, `BUN_BUILD_CACHE_DIR`, etc. No `LINUX_MUSL_SYSROOT`/cross-target is needed — build natively on the x86-64 host.
-- Build opencode with `--target=opencode-linux-x64` (glibc default) and `BUN_COMPILE_EXECUTABLE_PATH` pointing at the custom bun.
-- The `bun-highway-targets.patch` is essential on glibc: without it the runtime still contains SSE4.2/AVX paths that SIGILL on Penryn. With it, no scalar `popcnt`/`tzcnt`/`lzcnt` remain (only runtime-gated AVX/AVX-512 paths, same as the musl build).
-- Deploy with the official installer: `./install --binary /path/to/opencode` (installs to `~/.opencode/bin/opencode`). Set `OPENCODE_DISABLE_AUTOUPDATE=1` and add `~/.opencode/bin` to PATH in both `~/.bashrc` and `~/.profile` (Debian's `.profile` re-prepends `~/bin` after sourcing `.bashrc`).
-- To suppress the in-TUI update notification, create `~/.config/opencode/opencode.json` with `{"update": "disable"}` (more reliable than the env var for the background service).
+### Prerequisites (Debian build host)
+
+- Bun 1.4.4 (`~/.bun/bin/bun`), Rust nightly-2026-09-15 with `rust-src` (`~/.cargo/bin`), LLVM 23.1.1, CMake, Ninja, NASM, ICU dev headers/libs.
+- Host ICU70 libraries for the LLVM binaries (`LD_LIBRARY_PATH`).
+- See [Bun's build prerequisites](https://bun.com/docs/project/development).
+
+### Build
+
+```bash
+export RECIPE="$PWD"
+export WORK="$HOME/opencode-core2-work"
+mkdir -p "$WORK"
+git clone --depth 1 --branch bun-v1.4.4 https://github.com/oven-sh/bun.git "$WORK/bun"
+git clone --depth 1 --branch v2.1.2 https://github.com/anomalyco/opencode.git "$WORK/opencode"
+
+git -C "$WORK/bun" apply "$RECIPE/patches/bun.patch"
+git -C "$WORK/bun" apply "$RECIPE/patches/bun-highway-targets.patch"
+git -C "$WORK/opencode" apply "$RECIPE/patches/opencode.patch"
+
+mkdir -p "$WORK/bun/vendor/WebKit"
+git -C "$WORK/bun/vendor/WebKit" init
+git -C "$WORK/bun/vendor/WebKit" fetch --depth 1 https://github.com/oven-sh/WebKit.git d6375c72affe0f70222cdcb45012b10f0bf3a9d5
+git -C "$WORK/bun/vendor/WebKit" checkout --detach FETCH_HEAD
+
+export PATH="/path/to/nasm/bin:/path/to/llvm/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export LD_LIBRARY_PATH=/path/to/icu70/lib
+export RUSTUP_TOOLCHAIN=nightly-2026-09-15
+export BUN_CORE2_BUILD=1
+export BUN_BUILD_CACHE_DIR="$WORK/cache"
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+
+cd "$WORK/bun"
+bun install --frozen-lockfile
+bun scripts/build.ts --profile=release-local --abi=gnu --arch=x64 --build-dir=build/core2-gnu -j2
+
+cd "$WORK/opencode"
+bun install --frozen-lockfile --ignore-scripts
+OPENCODE_VERSION=2.1.2 \
+BUN_COMPILE_EXECUTABLE_PATH="$WORK/bun/build/core2-gnu/bun" \
+bun packages/cli/script/build.ts --target=opencode-linux-x64 \
+  --skip-install --skip-web-ui --outdir="$WORK/opencode-dist"
+```
+
+Output: `bun/build/core2-gnu/bun` and `opencode-dist/cli-linux-x64/bin/opencode`.
+
+### Verify and install (on the Debian target)
+
+```bash
+# 1. Runtime smoke (loopback only, isolated profile)
+mkdir -p /tmp/scratchpad/oc-test
+HOME=/tmp/scratchpad/oc-test ./bun /path/to/tests/runtime-smoke.mjs
+# expect: CORE2_RUNTIME_OK: ...
+
+# 2. OpenCode smoke
+HOME=/tmp/scratchpad/oc-test OPENCODE_DISABLE_AUTOUPDATE=1 ./opencode --version
+# expect: opencode v2.1.2
+
+# 3. Install via the official installer
+./install --binary /path/to/opencode
+# installs to ~/.opencode/bin/opencode (+ opencode2 shim)
+
+# 4. PATH + auto-update disable (add to both ~/.bashrc and ~/.profile)
+echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.bashrc
+echo 'export OPENCODE_DISABLE_AUTOUPDATE=1' >> ~/.bashrc
+echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.profile
+echo 'export OPENCODE_DISABLE_AUTOUPDATE=1' >> ~/.profile
+
+# 5. Suppress in-TUI update notification
+mkdir -p ~/.config/opencode
+echo '{"update": "disable"}' > ~/.config/opencode/opencode.json
+```
+
+Debian's `.profile` re-prepends `~/bin` after sourcing `.bashrc`, so the PATH export must be in both files or `opencode` will resolve to `~/bin/opencode` instead of `~/.opencode/bin/opencode`.
 
 Verified artifacts (glibc): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
 
