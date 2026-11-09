@@ -15,6 +15,7 @@ Verified: Bun startup, Unicode, crypto/hash vectors, compression, JS JIT, WASM p
 ## Patches
 
 - [`patches/bun.patch`](patches/bun.patch): opt-in `BUN_CORE2_BUILD=1` changes the Linux x64 CPU target from Nehalem to Penryn. The shared flag table also supplies Rust's CPU target and local WebKit's target. The patch also preserves the musl target/sysroot when configuring local WebKit.
+- [`patches/bun-highway-targets.patch`](patches/bun-highway-targets.patch): disables Highway's SSE4/AVX2/AVX3/… x86 targets (in addition to SVE) so no popcnt/tzcnt/AVX/BMI code paths are compiled. **Required for a Penryn-clean build** — without it, Highway compiles all x86 targets and its runtime dispatch can select an SSE4.2+ path on Penryn, causing SIGILL (observed on Debian/glibc builds).
 - [`patches/opencode.patch`](patches/opencode.patch): lets the build use `BUN_COMPILE_EXECUTABLE_PATH` rather than embedding a stock runtime.
 
 Rebuilding only OpenCode with stock Bun, or rebuilding Bun while linking stock prebuilt JavaScriptCore, is insufficient. Runtime CPU checks were not bypassed. No provider, account, client-identity or quota logic was patched. The previous HTTP 429's exact server-side cause remains unknown; this is not a quota bypass or a promise of future free-model availability.
@@ -34,6 +35,7 @@ git clone --depth 1 --branch bun-v1.4.4 https://github.com/oven-sh/bun.git "$WOR
 git clone --depth 1 --branch v2.1.2 https://github.com/anomalyco/opencode.git "$WORK/opencode"
 
 git -C "$WORK/bun" apply "$RECIPE/patches/bun.patch"
+git -C "$WORK/bun" apply "$RECIPE/patches/bun-highway-targets.patch"
 git -C "$WORK/opencode" apply "$RECIPE/patches/opencode.patch"
 
 mkdir -p "$WORK/bun/vendor/WebKit"
@@ -77,6 +79,19 @@ These commands mirror the successful pinned build with portable paths. Prerequis
 5. Only then switch your launcher to the compatible binary. Retain the original launcher and a private rollback snapshot. Disable automatic OpenCode updates with `OPENCODE_DISABLE_AUTOUPDATE=1`; stock updates may restore the unsupported runtime. Do not use stock `bun upgrade` on this CPU.
 
 The matching build passed native binary export/dependency/hardening checks. Only this physical target and pinned version pair have been validated, not the full Bun/OpenCode test matrices.
+
+## Debian / glibc (tested 2026-11-10)
+
+The recipe above targets Alpine/musl. A glibc (Debian) build is also possible and was validated on an identical MacBookAir3,1 running Debian 13:
+
+- Apply `patches/bun.patch` **and** `patches/bun-highway-targets.patch` to bun; apply `patches/opencode.patch` to opencode.
+- Build bun with `--abi=gnu` (instead of `--abi=musl`) and the same `BUN_CORE2_BUILD=1`, `BUN_BUILD_CACHE_DIR`, etc. No `LINUX_MUSL_SYSROOT`/cross-target is needed — build natively on the x86-64 host.
+- Build opencode with `--target=opencode-linux-x64` (glibc default) and `BUN_COMPILE_EXECUTABLE_PATH` pointing at the custom bun.
+- The `bun-highway-targets.patch` is essential on glibc: without it the runtime still contains SSE4.2/AVX paths that SIGILL on Penryn. With it, no scalar `popcnt`/`tzcnt`/`lzcnt` remain (only runtime-gated AVX/AVX-512 paths, same as the musl build).
+- Deploy with the official installer: `./install --binary /path/to/opencode` (installs to `~/.opencode/bin/opencode`). Set `OPENCODE_DISABLE_AUTOUPDATE=1` and add `~/.opencode/bin` to PATH in both `~/.bashrc` and `~/.profile` (Debian's `.profile` re-prepends `~/bin` after sourcing `.bashrc`).
+- To suppress the in-TUI update notification, create `~/.config/opencode/opencode.json` with `{"update": "disable"}` (more reliable than the env var for the background service).
+
+Verified artifacts (glibc): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
 
 ## Related reports
 
