@@ -156,8 +156,6 @@ mkdir -p ~/.config/opencode
 echo '{"update": "disable"}' > ~/.config/opencode/opencode.json
 ```
 
-Debian's `.profile` re-prepends `~/bin` after sourcing `.bashrc`, so the PATH export must be in both files or `opencode` will resolve to `~/bin/opencode` instead of `~/.opencode/bin/opencode`.
-
 Verified artifacts (glibc): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
 
 ## Related reports
