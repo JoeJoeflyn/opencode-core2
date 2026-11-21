@@ -15,7 +15,7 @@ Verified: Bun startup, Unicode, crypto/hash vectors, compression, JS JIT, WASM p
 ## Patches
 
 - [`patches/bun.patch`](patches/bun.patch): opt-in `BUN_CORE2_BUILD=1` changes the Linux x64 CPU target from Nehalem to Penryn. The shared flag table also supplies Rust's CPU target and local WebKit's target. The patch also preserves the musl target/sysroot when configuring local WebKit.
-- [`patches/bun-highway-targets.patch`](patches/bun-highway-targets.patch): disables Highway's SSE4/AVX2/AVX3/… x86 targets (in addition to SVE) so no popcnt/tzcnt/AVX/BMI code paths are compiled. **Required for a Penryn-clean build** — without it, Highway compiles all x86 targets and its runtime dispatch can select an SSE4.2+ path on Penryn, causing SIGILL (observed on Debian/glibc builds).
+- [`patches/bun-highway-targets.patch`](patches/bun-highway-targets.patch): Debian recipe only. With `BUN_CORE2_BUILD=1` on Linux x64/glibc, omit Highway's SSE4 and newer x86 targets. Other builds retain upstream's target set.
 - [`patches/opencode.patch`](patches/opencode.patch): lets the build use `BUN_COMPILE_EXECUTABLE_PATH` rather than embedding a stock runtime.
 
 Rebuilding only OpenCode with stock Bun, or rebuilding Bun while linking stock prebuilt JavaScriptCore, is insufficient. Runtime CPU checks were not bypassed. No provider, account, client-identity or quota logic was patched. The previous HTTP 429's exact server-side cause remains unknown; this is not a quota bypass or a promise of future free-model availability.
@@ -35,7 +35,6 @@ git clone --depth 1 --branch bun-v1.4.4 https://github.com/oven-sh/bun.git "$WOR
 git clone --depth 1 --branch v2.1.2 https://github.com/anomalyco/opencode.git "$WORK/opencode"
 
 git -C "$WORK/bun" apply "$RECIPE/patches/bun.patch"
-git -C "$WORK/bun" apply "$RECIPE/patches/bun-highway-targets.patch"
 git -C "$WORK/opencode" apply "$RECIPE/patches/opencode.patch"
 
 mkdir -p "$WORK/bun/vendor/WebKit"
@@ -82,7 +81,7 @@ The matching build passed native binary export/dependency/hardening checks. Only
 
 ## Debian / glibc (tested 2026-11-10)
 
-A glibc (Debian) build was validated on an identical MacBookAir3,1 running Debian 13. It uses the same patches as the Alpine recipe, but builds natively on the x86-64 host (no musl sysroot). The `bun-highway-targets.patch` is **required** — without it, Highway compiles SSE4.2/AVX paths that SIGILL on Penryn.
+A contributor reports that `opencode --version` ran on a MacBookAir3,1 with Debian 13 after disabling Highway's newer x86 targets. They observed SIGILL without that workaround; the faulting instruction and dispatch path were not established. This is a startup check, not the full Alpine TUI test. Build on a glibc x86-64 host capable of running stock Bun 1.4.4; the Penryn machine need only run the resulting binaries.
 
 ### Prerequisites (Debian build host)
 
@@ -132,31 +131,26 @@ Output: `bun/build/core2-gnu/bun` and `opencode-dist/cli-linux-x64/bin/opencode`
 ### Verify and install (on the Debian target)
 
 ```bash
-# 1. Runtime smoke (loopback only, isolated profile)
-mkdir -p /tmp/scratchpad/oc-test
-HOME=/tmp/scratchpad/oc-test ./bun /path/to/tests/runtime-smoke.mjs
+# From the directory containing the copied binaries, use a temporary profile.
+(
+set -e
+ulimit -c 0
+HOME=$(mktemp -d)
+export HOME
+export XDG_CONFIG_HOME="$HOME/config" XDG_DATA_HOME="$HOME/data"
+export XDG_STATE_HOME="$HOME/state" XDG_CACHE_HOME="$HOME/cache"
+export OPENCODE_DISABLE_AUTOUPDATE=1
+./bun /path/to/tests/runtime-smoke.mjs
 # expect: CORE2_RUNTIME_OK: ...
 
-# 2. OpenCode smoke
-HOME=/tmp/scratchpad/oc-test OPENCODE_DISABLE_AUTOUPDATE=1 ./opencode --version
+./opencode --version
 # expect: opencode v2.1.2
-
-# 3. Install via the official installer
-./install --binary /path/to/opencode
-# installs to ~/.opencode/bin/opencode (+ opencode2 shim)
-
-# 4. PATH + auto-update disable (add to both ~/.bashrc and ~/.profile)
-echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.bashrc
-echo 'export OPENCODE_DISABLE_AUTOUPDATE=1' >> ~/.bashrc
-echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.profile
-echo 'export OPENCODE_DISABLE_AUTOUPDATE=1' >> ~/.profile
-
-# 5. Suppress in-TUI update notification
-mkdir -p ~/.config/opencode
-echo '{"update": "disable"}' > ~/.config/opencode/opencode.json
+)
 ```
 
-Verified artifacts (glibc): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
+Before replacing a working installation, follow [Verify and install safely](#verify-and-install-safely), including the isolated TUI check and backup. Then use the `install` script from the pinned OpenCode checkout on the target: `./install --binary /absolute/path/to/opencode`. Set `OPENCODE_DISABLE_AUTOUPDATE=1` in your launcher or shell profile. To suppress update notifications, add or change the top-level `"update": "disable"` setting in your OpenCode config; preserve the rest of the file.
+
+Contributor's original artifact hashes (glibc; not a reproducible-build guarantee): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
 
 ## Related reports
 
