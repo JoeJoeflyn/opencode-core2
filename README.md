@@ -15,6 +15,7 @@ Verified: Bun startup, Unicode, crypto/hash vectors, compression, JS JIT, WASM p
 ## Patches
 
 - [`patches/bun.patch`](patches/bun.patch): opt-in `BUN_CORE2_BUILD=1` changes the Linux x64 CPU target from Nehalem to Penryn. The shared flag table also supplies Rust's CPU target and local WebKit's target. The patch also preserves the musl target/sysroot when configuring local WebKit.
+- [`patches/bun-highway-targets.patch`](patches/bun-highway-targets.patch): Debian recipe only. With `BUN_CORE2_BUILD=1` on Linux x64/glibc, omit Highway's SSE4 and newer x86 targets. Other builds retain upstream's target set.
 - [`patches/opencode.patch`](patches/opencode.patch): lets the build use `BUN_COMPILE_EXECUTABLE_PATH` rather than embedding a stock runtime.
 
 Rebuilding only OpenCode with stock Bun, or rebuilding Bun while linking stock prebuilt JavaScriptCore, is insufficient. Runtime CPU checks were not bypassed. No provider, account, client-identity or quota logic was patched. The previous HTTP 429's exact server-side cause remains unknown; this is not a quota bypass or a promise of future free-model availability.
@@ -77,6 +78,79 @@ These commands mirror the successful pinned build with portable paths. Prerequis
 5. Only then switch your launcher to the compatible binary. Retain the original launcher and a private rollback snapshot. Disable automatic OpenCode updates with `OPENCODE_DISABLE_AUTOUPDATE=1`; stock updates may restore the unsupported runtime. Do not use stock `bun upgrade` on this CPU.
 
 The matching build passed native binary export/dependency/hardening checks. Only this physical target and pinned version pair have been validated, not the full Bun/OpenCode test matrices.
+
+## Debian / glibc (tested 2026-11-10)
+
+A contributor reports that `opencode --version` ran on a MacBookAir3,1 with Debian 13 after disabling Highway's newer x86 targets. They observed SIGILL without that workaround; the faulting instruction and dispatch path were not established. This is a startup check, not the full Alpine TUI test. Build on a glibc x86-64 host capable of running stock Bun 1.4.4; the Penryn machine need only run the resulting binaries.
+
+### Prerequisites (Debian build host)
+
+- Bun 1.4.4 (`~/.bun/bin/bun`), Rust nightly-2026-09-15 with `rust-src` (`~/.cargo/bin`), LLVM 23.1.1, CMake, Ninja, NASM, ICU dev headers/libs.
+- Host ICU70 libraries for the LLVM binaries (`LD_LIBRARY_PATH`).
+- See [Bun's build prerequisites](https://bun.com/docs/project/development).
+
+### Build
+
+```bash
+export RECIPE="$PWD"
+export WORK="$HOME/opencode-core2-work"
+mkdir -p "$WORK"
+git clone --depth 1 --branch bun-v1.4.4 https://github.com/oven-sh/bun.git "$WORK/bun"
+git clone --depth 1 --branch v2.1.2 https://github.com/anomalyco/opencode.git "$WORK/opencode"
+
+git -C "$WORK/bun" apply "$RECIPE/patches/bun.patch"
+git -C "$WORK/bun" apply "$RECIPE/patches/bun-highway-targets.patch"
+git -C "$WORK/opencode" apply "$RECIPE/patches/opencode.patch"
+
+mkdir -p "$WORK/bun/vendor/WebKit"
+git -C "$WORK/bun/vendor/WebKit" init
+git -C "$WORK/bun/vendor/WebKit" fetch --depth 1 https://github.com/oven-sh/WebKit.git d6375c72affe0f70222cdcb45012b10f0bf3a9d5
+git -C "$WORK/bun/vendor/WebKit" checkout --detach FETCH_HEAD
+
+export PATH="/path/to/nasm/bin:/path/to/llvm/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export LD_LIBRARY_PATH=/path/to/icu70/lib
+export RUSTUP_TOOLCHAIN=nightly-2026-09-15
+export BUN_CORE2_BUILD=1
+export BUN_BUILD_CACHE_DIR="$WORK/cache"
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+
+cd "$WORK/bun"
+bun install --frozen-lockfile
+bun scripts/build.ts --profile=release-local --abi=gnu --arch=x64 --build-dir=build/core2-gnu -j2
+
+cd "$WORK/opencode"
+bun install --frozen-lockfile --ignore-scripts
+OPENCODE_VERSION=2.1.2 \
+BUN_COMPILE_EXECUTABLE_PATH="$WORK/bun/build/core2-gnu/bun" \
+bun packages/cli/script/build.ts --target=opencode-linux-x64 \
+  --skip-install --skip-web-ui --outdir="$WORK/opencode-dist"
+```
+
+Output: `bun/build/core2-gnu/bun` and `opencode-dist/cli-linux-x64/bin/opencode`.
+
+### Verify and install (on the Debian target)
+
+```bash
+# From the directory containing the copied binaries, use a temporary profile.
+(
+set -e
+ulimit -c 0
+HOME=$(mktemp -d)
+export HOME
+export XDG_CONFIG_HOME="$HOME/config" XDG_DATA_HOME="$HOME/data"
+export XDG_STATE_HOME="$HOME/state" XDG_CACHE_HOME="$HOME/cache"
+export OPENCODE_DISABLE_AUTOUPDATE=1
+./bun /path/to/tests/runtime-smoke.mjs
+# expect: CORE2_RUNTIME_OK: ...
+
+./opencode --version
+# expect: opencode v2.1.2
+)
+```
+
+Before replacing a working installation, follow [Verify and install safely](#verify-and-install-safely), including the isolated TUI check and backup. Then use the `install` script from the pinned OpenCode checkout on the target: `./install --binary /absolute/path/to/opencode`. Set `OPENCODE_DISABLE_AUTOUPDATE=1` in your launcher or shell profile. To suppress update notifications, add or change the top-level `"update": "disable"` setting in your OpenCode config; preserve the rest of the file.
+
+Contributor's original artifact hashes (glibc; not a reproducible-build guarantee): bun sha256 `4cc07d97f16f9b0e28d97b1c385a6f952732dd31e336834f31dbdf795156b29a`, opencode sha256 `a8b40be1dd406b98d7223fad8ee174bf2fec677708060bfa81779624054ce165`. `opencode --version` → `opencode v2.1.2`, no SIGILL.
 
 ## Related reports
 
